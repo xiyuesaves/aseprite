@@ -3,17 +3,6 @@ on: [push, pull_request]
 jobs:
   build:
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest]
-        build_type: [Release]
-        ui: [gui]
-        scripting: [lua]
-        exclude:
-          - build_type: Release
-            ui: gui
-            scripting: lua
     steps:
     - uses: actions/checkout@v4
       with:
@@ -38,7 +27,7 @@ jobs:
         export skia_arch=x64
 
         cmake -S . -B build -G Ninja \
-          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+          -DCMAKE_BUILD_TYPE=Release \
           -DCMAKE_OSX_DEPLOYMENT_TARGET=10.9 \
           -DENABLE_TESTS=ON \
           -DENABLE_SCRIPTING=$enable_scripting \
