@@ -39,8 +39,7 @@ jobs:
     - name: Compiling
       shell: bash
       run: |
-        pwd
-        ls
+        mv libcrypto-1_1-x64.dll build/bin
         cd build && ninja
     - uses: actions/upload-artifact@v4
       with:
@@ -48,4 +47,4 @@ jobs:
         path: |
           D:/a/aseprite/aseprite/build/bin/data
           D:/a/aseprite/aseprite/build/bin/aseprite.exe
-          D:/a/aseprite/aseprite/libcrypto-1_1-x64.dll
+          D:/a/aseprite/aseprite/build/bin/libcrypto-1_1-x64.dll
