@@ -27,7 +27,7 @@ namespace app {
 
 static Strings* singleton = nullptr;
 
-const char* Strings::kDefLanguage = "en";
+const char* Strings::kDefLanguage = "cn";
 
 // static
 void Strings::createInstance(Preferences& pref, Extensions& exts)

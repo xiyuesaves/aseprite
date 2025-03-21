@@ -6,8 +6,8 @@
         <author name="Nicolas Desilets" url="https://twitter.com/MapleGecko" />
     </authors>
     <fonts>
-        <font id="default" font="Aseprite" />
-        <font id="mini" font="Aseprite Mini" mnemonics="off" />
+        <font id="default" name="ttf-font" type="truetype" file="simhei.ttf" size="8" />
+        <font id="mini" name="ttf-font" type="truetype" file="simhei.ttf" size="8" />
     </fonts>
     <dimensions>
         <dim id="scrollbar_size" value="12" />
