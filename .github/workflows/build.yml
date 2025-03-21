@@ -12,7 +12,6 @@ jobs:
       shell: bash
       run: |
         choco install wget -y --no-progress
-        wget https://github.com/blueloveTH/aseprite/releases/download/v0.01/libcrypto-1_1-x64.dll
         wget https://github.com/aseprite/skia/releases/download/m102-861e4743af/Skia-Windows-Release-x64.zip
         unzip Skia-Windows-Release-x64.zip -d skia
     - uses: aseprite/get-ninja@main
@@ -39,6 +38,7 @@ jobs:
     - name: Compiling
       shell: bash
       run: |
+        wget https://github.com/blueloveTH/aseprite/releases/download/v0.01/libcrypto-1_1-x64.dll
         mv libcrypto-1_1-x64.dll build/bin
         cd build && ninja
     - uses: actions/upload-artifact@v4
