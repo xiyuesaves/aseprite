@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019-2022  Igara Studio S.A.
+// Copyright (C) 2019-present  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -19,6 +19,7 @@
 
 #include "base/fs.h"
 #include "base/string.h"
+#include "dio/detect_format.h"
 #include "os/surface.h"
 #include "os/system.h"
 #include "os/window.h"
@@ -82,6 +83,9 @@ public:
   unsigned int m_version;
   bool m_removed;
   mutable bool m_is_folder;
+#ifdef _WIN32
+  bool m_isHidden = false;
+#endif
   std::atomic<double> m_thumbnailProgress;
   std::atomic<os::Surface*> m_thumbnail;
 #ifdef _WIN32
@@ -123,7 +127,12 @@ public:
 
   bool needThumbnail() const override
   {
-    return !isBrowsable() && m_thumbnail == nullptr && m_thumbnailProgress < 1.0;
+    bool need = !isBrowsable() && m_thumbnail == nullptr && m_thumbnailProgress < 1.0;
+    if (need && dio::detect_format_by_file_extension(m_filename) >= dio::FileFormat::FIRST_CUSTOM) {
+      // No thumbnails for custom formats
+      return false;
+    }
+    return need;
   }
 
   os::SurfaceRef getThumbnail() override;
@@ -266,7 +275,7 @@ IFileItem* FileSystemModule::getRootFileItem()
     fileitem->m_pidl = pidl;
     fileitem->m_fullpidl = pidl;
 
-    SFGAOF attrib = SFGAO_FOLDER;
+    SFGAOF attrib = SFGAO_FOLDER | SFGAO_HIDDEN;
     shl_idesktop->GetAttributesOf(1, (LPCITEMIDLIST*)&pidl, &attrib);
 
     update_by_pidl(fileitem, attrib);
@@ -357,7 +366,7 @@ bool FileItem::isHidden() const
   ASSERT(m_displayname != NOTINITIALIZED);
 
 #ifdef _WIN32
-  return false;
+  return m_isHidden;
 #else
   return m_displayname[0] == '.';
 #endif
@@ -461,8 +470,8 @@ const FileItemList& FileItem::children()
 
         // Get the interface to enumerate subitems
         hr = pFolder->EnumObjects(
-          reinterpret_cast<HWND>(os::instance()->defaultWindow()->nativeHandle()),
-          SHCONTF_FOLDERS | SHCONTF_NONFOLDERS,
+          reinterpret_cast<HWND>(os::System::instance()->defaultWindow()->nativeHandle()),
+          SHCONTF_FOLDERS | SHCONTF_NONFOLDERS | SHCONTF_INCLUDEHIDDEN,
           &pEnum);
 
         if (hr == S_OK && pEnum) {
@@ -473,10 +482,9 @@ const FileItemList& FileItem::children()
           while (pEnum->Next(256, itempidl, &fetched) == S_OK && fetched > 0) {
             // Request the SFGAO_FOLDER attribute to know what of the
             // item is file or a folder
-            for (c = 0; c < fetched; ++c) {
-              attribs[c] = SFGAO_FOLDER;
-              pFolder->GetAttributesOf(1, (LPCITEMIDLIST*)itempidl, attribs + c);
-            }
+            for (c = 0; c < fetched; ++c)
+              attribs[c] = SFGAO_FOLDER | SFGAO_HIDDEN;
+            pFolder->GetAttributesOf(fetched, (LPCITEMIDLIST*)itempidl, attribs);
 
             // Generate the FileItems
             for (c = 0; c < fetched; ++c) {
@@ -628,7 +636,7 @@ FileItem::~FileItem()
 {
   FS_TRACE("FS: Destroying FileItem() with parent %p\n", m_parent);
 
-  m_thumbnail.exchange(nullptr);
+  setThumbnail(nullptr);
 
 #ifdef _WIN32
   if (m_fullpidl && m_fullpidl != m_pidl) {
@@ -755,6 +763,9 @@ static void update_by_pidl(FileItem* fileitem, SFGAOF attrib)
   // Is it a folder?
 
   fileitem->m_is_folder = calc_is_folder(fileitem->m_filename, attrib);
+  #if _WIN32
+  fileitem->m_isHidden = (attrib & SFGAO_HIDDEN ? true : false);
+  #endif
 
   // Get the name to display
 

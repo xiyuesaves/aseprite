@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019-2022  Igara Studio S.A.
+// Copyright (C) 2019-2026  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -18,17 +18,17 @@
 #include "app/cmd/copy_rect.h"
 #include "app/cmd/copy_region.h"
 #include "app/cmd/patch_cel.h"
+#include "app/cmd/set_cel_image.h"
+#include "app/cmd/set_cel_position.h"
 #include "app/cmd_sequence.h"
 #include "app/context.h"
 #include "app/doc.h"
 #include "app/site.h"
 #include "app/util/cel_ops.h"
-#include "app/util/range_utils.h"
 #include "base/debug.h"
 #include "doc/algorithm/shrink_bounds.h"
 #include "doc/cel.h"
 #include "doc/image.h"
-#include "doc/image_impl.h"
 #include "doc/layer.h"
 #include "doc/layer_tilemap.h"
 #include "doc/primitives.h"
@@ -112,18 +112,16 @@ ExpandCelCanvas::ExpandCelCanvas(Site site,
   // Create a new cel
   if (!m_cel) {
     m_celCreated = true;
-    m_cel = new Cel(site.frame(), ImageRef(NULL));
+    m_cel = new Cel(site.frame(), ImageRef(nullptr));
   }
 
   m_origCelPos = m_cel->position();
 
   // Region to draw
-  gfx::Rect celBounds = (m_celCreated ? m_sprite->bounds() : m_cel->bounds());
-
-  gfx::Rect spriteBounds(0, 0, m_sprite->width(), m_sprite->height());
-
+  const gfx::Rect spriteBounds = m_sprite->bounds();
+  const gfx::Rect celBounds = (m_celCreated ? spriteBounds : m_cel->bounds());
   if (tiledMode == TiledMode::NONE) { // Non-tiled
-    m_bounds = celBounds.createUnion(spriteBounds);
+    m_bounds = (celBounds | spriteBounds);
   }
   else { // Tiled
     m_bounds = spriteBounds;
@@ -152,12 +150,6 @@ ExpandCelCanvas::ExpandCelCanvas(Site site,
     }
   }
 
-  // We have to adjust the cel position to match the m_dstImage
-  // position (the new m_dstImage will be used in RenderEngine to
-  // draw this cel).
-  if (!isTilesetPreview())
-    m_cel->setPosition(m_bounds.origin());
-
   EXP_TRACE("ExpandCelCanvas",
             "m_cel->bounds()=",
             m_cel->bounds(),
@@ -167,27 +159,24 @@ ExpandCelCanvas::ExpandCelCanvas(Site site,
             m_grid.origin(),
             m_grid.tileSize());
 
-  if (m_celCreated) {
+  if (!m_celCreated && isTilesetPreview()) {
+    getDestTileset();
+  }
+  else if (m_celCreated || (m_layer && m_layer->isTilemap())) {
     // Calling "getDestCanvas()" we create the m_dstImage
     getDestCanvas();
 
+    // We have to adjust the cel position to match the m_dstImage
+    // position (the new m_dstImage will be used in RenderEngine to
+    // draw this cel).
+    m_cel->setPosition(m_bounds.origin());
     m_cel->data()->setImage(m_dstImage, m_layer);
 
-    if (previewSpecificLayerChanges())
+    if (m_celCreated && previewSpecificLayerChanges())
       static_cast<LayerImage*>(m_layer)->addCel(m_cel);
   }
-  else if (m_layer->isTilemap() && m_tilemapMode == TilemapMode::Tiles) {
-    getDestCanvas();
-    m_cel->data()->setImage(m_dstImage, m_layer);
-  }
-  // If we are in a tilemap, we use m_dstImage to draw pixels (instead
-  // of the tilemap image).
-  else if (m_layer->isTilemap() && m_tilemapMode == TilemapMode::Pixels && !isTilesetPreview()) {
-    getDestCanvas();
-    m_cel->data()->setImage(m_dstImage, m_layer);
-  }
-  else if (isTilesetPreview()) {
-    getDestTileset();
+  else {
+    m_cel->setPosition(m_bounds.origin());
   }
 }
 
@@ -222,7 +211,9 @@ void ExpandCelCanvas::commit()
   }
 
   // Was the cel created in the start of the tool-loop?
-  if (m_celCreated) {
+  if ((m_celCreated) ||
+      // Was the cel without an image when the tool-loop started?
+      (m_dstImage && !m_celImage)) {
     ASSERT(m_cel);
     ASSERT(!m_celImage);
 
@@ -232,7 +223,8 @@ void ExpandCelCanvas::commit()
 
     if (previewSpecificLayerChanges()) {
       // We can temporary remove the cel.
-      static_cast<LayerImage*>(m_layer)->removeCel(m_cel);
+      if (m_celCreated)
+        m_layer->removeCel(m_cel);
 
       gfx::Rect trimBounds = getTrimDstImageBounds();
       if (!trimBounds.isEmpty()) {
@@ -253,16 +245,26 @@ void ExpandCelCanvas::commit()
           ImageRef newImage(trimDstImage(trimBounds));
           ASSERT(newImage);
 
-          m_cel->data()->setImage(newImage, m_layer);
-          m_cel->setPosition(m_cel->position() + (m_layer->isTilemap() ?
-                                                    // TODO we should get the exact coordinate from
-                                                    // getTrimDstImageBounds()
-                                                    m_grid.tileToCanvas(trimBounds.origin()) :
-                                                    trimBounds.origin()));
+          gfx::Point newPosition = (m_cel->position() +
+                                    // TODO we should get the exact coordinate from
+                                    // getTrimDstImageBounds()
+                                    (m_layer->isTilemap() ?
+                                       m_grid.tileToCanvas(trimBounds.origin()) :
+                                       trimBounds.origin()));
+
+          if (m_celCreated) {
+            m_cel->data()->setImage(newImage, m_layer);
+            m_cel->setPosition(newPosition);
+          }
+          else {
+            m_cmds->executeAndAdd(new cmd::SetCelImage(m_cel, newImage));
+            m_cmds->executeAndAdd(new cmd::SetCelPosition(m_cel, newPosition));
+          }
         }
 
         // And add the cel again in the layer.
-        m_cmds->executeAndAdd(new cmd::AddCel(m_layer, m_cel));
+        if (m_celCreated)
+          m_cmds->executeAndAdd(new cmd::AddCel(m_layer, m_cel));
       }
       else {
         // Delete unused cel
@@ -729,6 +731,47 @@ void ExpandCelCanvas::copySourceTilestToDestTileset()
     // To rehash the tileset
     m_dstTileset->notifyTileContentChange(i);
   }
+}
+
+void ExpandCelCanvas::prepareSpriteForScript()
+{
+  // If the expanded cel was already committed,
+  // that means it finished stamping on the sprite.
+  if (m_committed)
+    return;
+
+  // If is tileset preview or a selection tool (so m_dstImage is being
+  // used as a top layer preview only, not as part of the sprite):
+  // there is nothing we have to fix for the script Image:drawSprite()
+  // call.
+  if (isTilesetPreview() || !previewSpecificLayerChanges())
+    return;
+
+  m_cel->setPosition(m_origCelPos);
+
+  if (m_celCreated)
+    static_cast<LayerImage*>(m_layer)->removeCel(m_cel);
+  else if (m_layer->isTilemap())
+    m_cel->data()->setImage(m_celImage, m_layer);
+}
+
+void ExpandCelCanvas::restoreSpriteForToolLoop()
+{
+  // If already committed, nothing to restore
+  if (m_committed)
+    return;
+
+  if (isTilesetPreview() || !previewSpecificLayerChanges())
+    return;
+
+  ASSERT(m_layer); // previewSpecificLayerChanges() filters the nullptr case
+
+  m_cel->setPosition(m_bounds.origin());
+
+  if (m_celCreated)
+    static_cast<LayerImage*>(m_layer)->addCel(m_cel);
+  else if (m_layer->isTilemap())
+    m_cel->data()->setImage(m_dstImage, m_layer);
 }
 
 } // namespace app

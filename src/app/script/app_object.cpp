@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2024  Igara Studio S.A.
+// Copyright (C) 2018-present  Igara Studio S.A.
 // Copyright (C) 2015-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -10,6 +10,7 @@
 #endif
 
 #include "app/app.h"
+#include "app/color_picker.h"
 #include "app/commands/commands.h"
 #include "app/commands/params.h"
 #include "app/context.h"
@@ -34,10 +35,10 @@
 #include "app/tools/tool_loop_manager.h"
 #include "app/tx.h"
 #include "app/ui/context_bar.h"
-#include "app/ui/doc_view.h"
 #include "app/ui/editor/editor.h"
 #include "app/ui/editor/tool_loop_impl.h"
 #include "app/ui/main_window.h"
+#include "app/ui/status_bar.h"
 #include "app/ui/timeline/timeline.h"
 #include "app/ui_context.h"
 #include "base/fs.h"
@@ -53,6 +54,7 @@
 
 #include <cstring>
 #include <iostream>
+#include <vector>
 
 namespace app { namespace script {
 
@@ -448,53 +450,114 @@ int App_useTool(lua_State* L)
     }
   }
 
-  // Do the tool loop
+  // Get the list of points for the tool
+  std::vector<gfx::Point> points;
   type = lua_getfield(L, 1, "points");
   if (type == LUA_TTABLE) {
-    InlineCommandExecution inlineCmd(ctx);
-
-    std::unique_ptr<tools::ToolLoop> loop(create_tool_loop_for_script(ctx, site, params));
-    if (!loop)
-      return luaL_error(L, "cannot draw in the active site");
-
-    tools::ToolLoopManager manager(loop.get());
-    tools::Pointer lastPointer;
-    bool first = true;
-
     lua_pushnil(L);
-    tools::ToolBox* toolbox = App::instance()->toolBox();
-    const bool isSelectionInk = (params.ink ==
-                                 toolbox->getInkById(tools::WellKnownInks::Selection));
-    const tools::Pointer::Button button = (!isSelectionInk ?
-                                             (buttonIdx == 0 ? tools::Pointer::Button::Left :
-                                                               tools::Pointer::Button::Right) :
-                                             tools::Pointer::Button::Left);
     while (lua_next(L, -2) != 0) {
-      gfx::Point pt = convert_args_into_point(L, -1);
-
-      tools::Pointer pointer(pt,
-                             // TODO configurable params
-                             tools::Vec2(0.0f, 0.0f),
-                             button,
-                             tools::Pointer::Type::Unknown,
-                             0.0f);
-      if (first) {
-        first = false;
-        manager.prepareLoop(pointer);
-        manager.pressButton(pointer);
-      }
-      else {
-        manager.movement(pointer);
-      }
-      lastPointer = pointer;
+      points.emplace_back(convert_args_into_point(L, -1));
       lua_pop(L, 1);
     }
-    if (!first)
-      manager.releaseButton(lastPointer);
-
-    manager.end();
   }
   lua_pop(L, 1);
+
+  if (points.empty())
+    return luaL_error(L, "no 'points' specified in app.useTool() function");
+
+  // Eyedropper tool: pick color from the first point only
+  if (params.ink->isEyedropper()) {
+    const gfx::Point& pt = points.front();
+
+    ColorPicker picker;
+    picker.pickColor(site, gfx::PointF(pt), render::Projection(), ColorPicker::FromComposition);
+    app::Color color = picker.color();
+    if (buttonIdx == 0)
+      Preferences::instance().colorBar.fgColor(color);
+    else
+      Preferences::instance().colorBar.bgColor(color);
+
+    push_obj<app::Color>(L, color);
+    return 1;
+  }
+
+  // Do the tool loop for other tools
+  InlineCommandExecution inlineCmd(ctx);
+
+  std::unique_ptr<tools::ToolLoop> loop(create_tool_loop_for_script(ctx, site, params));
+  if (!loop)
+    return luaL_error(L, "cannot draw in the active site");
+
+  tools::ToolLoopManager manager(loop.get());
+
+  tools::ToolBox* toolbox = App::instance()->toolBox();
+  const bool isSelectionInk = (params.ink == toolbox->getInkById(tools::WellKnownInks::Selection));
+  const tools::Pointer::Button button = (!isSelectionInk ?
+                                           (buttonIdx == 0 ? tools::Pointer::Button::Left :
+                                                             tools::Pointer::Button::Right) :
+                                           tools::Pointer::Button::Left);
+
+  bool first = true;
+  tools::Pointer lastPointer;
+  for (const gfx::Point& pt : points) {
+    tools::Pointer pointer(pt,
+                           // TODO configurable params
+                           tools::Vec2(0.0f, 0.0f),
+                           button,
+                           tools::Pointer::Type::Unknown,
+                           0.0f);
+    if (first) {
+      first = false;
+      manager.prepareLoop(pointer);
+      manager.pressButton(pointer);
+    }
+    else {
+      manager.movement(pointer);
+    }
+    lastPointer = pointer;
+  }
+  if (!first)
+    manager.releaseButton(lastPointer);
+
+  manager.end();
+  return 0;
+}
+
+int App_tip(lua_State* L)
+{
+  const auto* ctx = App::instance()->context();
+  if (!ctx || !ctx->isUIAvailable() || !StatusBar::instance())
+    return 0; // No UI to show the tooltip
+
+  std::string text;
+  double duration = 2.0;
+
+  if (lua_istable(L, 1)) {
+    int type = lua_getfield(L, 1, "text");
+    if (type == LUA_TSTRING)
+      text = lua_tostring(L, -1);
+    lua_pop(L, 1);
+
+    type = lua_getfield(L, 1, "duration");
+    if (type == LUA_TNUMBER)
+      duration = lua_tonumber(L, -1);
+    lua_pop(L, 1);
+  }
+  else {
+    if (!lua_isstring(L, 1))
+      return luaL_error(L, "app.tip text parameter must be a string");
+
+    text = lua_tostring(L, 1);
+
+    if (lua_isnumber(L, 2))
+      duration = lua_tonumber(L, 2);
+  }
+
+  if (text.empty())
+    return luaL_error(L, "app.tip text cannot be empty");
+
+  int msecs = std::clamp<int>(duration * 1000.0, 500, 30000);
+  StatusBar::instance()->showTip(msecs, text);
   return 0;
 }
 
@@ -524,6 +587,12 @@ int App_get_editor(lua_State* L)
     return 1;
   }
   return 0;
+}
+
+int App_get_clipboard(lua_State* L)
+{
+  push_app_clipboard(L);
+  return 1;
 }
 
 int App_get_sprite(lua_State* L)
@@ -814,6 +883,7 @@ const luaL_Reg App_methods[] = {
   { "alert",       App_alert       },
   { "refresh",     App_refresh     },
   { "useTool",     App_useTool     },
+  { "tip",         App_tip         },
   { nullptr,       nullptr         }
 };
 
@@ -854,6 +924,7 @@ const Property App_properties[] = {
   { "theme",          App_get_theme,          nullptr                },
   { "uiScale",        App_get_uiScale,        nullptr                },
   { "editor",         App_get_editor,         nullptr                },
+  { "clipboard",      App_get_clipboard,      nullptr                },
   { nullptr,          nullptr,                nullptr                }
 };
 

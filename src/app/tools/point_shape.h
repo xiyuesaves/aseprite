@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2020  Igara Studio S.A.
+// Copyright (C) 2020-present  Igara Studio S.A.
 // Copyright (C) 2001-2016  David Capello
 //
 // This program is distributed under the terms of
@@ -24,10 +24,15 @@ public:
   virtual bool isFloodFill() { return false; }
   virtual bool isSpray() { return false; }
   virtual void preparePointShape(ToolLoop* loop) {}
+  virtual void prepareForStroke(ToolLoop* loop) {}
 
   // The x, y position must be relative to the cel/src/dst image origin.
   virtual void transformPoint(ToolLoop* loop, const Stroke::Pt& pt) = 0;
-  virtual void getModifiedArea(ToolLoop* loop, int x, int y, gfx::Rect& area) = 0;
+  virtual void getModifiedArea(ToolLoop* loop,
+                               int x,
+                               int y,
+                               doc::SymmetryIndex symmetry,
+                               gfx::Rect& area) = 0;
 
 protected:
   // Calls loop->getInk()->inkHline() function for each horizontal-scanline

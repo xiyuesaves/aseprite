@@ -27,13 +27,14 @@
 #include <string>
 
 // Flags for FileOp::createLoadDocumentOperation()
-#define FILE_LOAD_SEQUENCE_NONE         0x00000001
-#define FILE_LOAD_SEQUENCE_ASK          0x00000002
-#define FILE_LOAD_SEQUENCE_ASK_CHECKBOX 0x00000004
-#define FILE_LOAD_SEQUENCE_YES          0x00000008
-#define FILE_LOAD_ONE_FRAME             0x00000010
-#define FILE_LOAD_DATA_FILE             0x00000020
-#define FILE_LOAD_CREATE_PALETTE        0x00000040
+#define FILE_LOAD_SEQUENCE_NONE          0x00000001
+#define FILE_LOAD_SEQUENCE_ASK           0x00000002
+#define FILE_LOAD_SEQUENCE_ASK_CHECKBOX  0x00000004
+#define FILE_LOAD_SEQUENCE_YES           0x00000008
+#define FILE_LOAD_ONE_FRAME              0x00000010
+#define FILE_LOAD_DATA_FILE              0x00000020
+#define FILE_LOAD_CREATE_PALETTE         0x00000040
+#define FILE_LOAD_AVOID_BACKGROUND_LAYER 0x00000080
 
 namespace doc {
 class Tag;
@@ -80,6 +81,7 @@ public:
   doc::Tag* tag() const { return m_tag; }
   doc::frame_t fromFrame() const { return m_framesSeq.firstFrame(); }
   doc::frame_t toFrame() const { return m_framesSeq.lastFrame(); }
+  gfx::Rect bounds() const { return m_bounds; }
   const doc::FramesSequence& framesSequence() const { return m_framesSeq; }
 
   doc::frame_t frames() const { return (doc::frame_t)m_framesSeq.size(); }
@@ -164,6 +166,7 @@ public:
 
   bool isSequence() const { return !m_seq.filename_list.empty(); }
   bool isOneFrame() const { return m_oneframe; }
+  bool ignoreEmpty() const { return m_ignoreEmpty; }
   bool preserveColorProfile() const { return m_config.preserveColorProfile; }
   const FileFormat* fileFormat() const { return m_format; }
 
@@ -177,6 +180,7 @@ public:
     m_document = nullptr;
     return doc;
   }
+  void setDocument(Doc* doc);
 
   const FileOpROI& roi() const { return m_roi; }
 
@@ -273,6 +277,8 @@ public:
   bool newBlend() const { return m_config.newBlend; }
   const FileOpConfig& config() const { return m_config; }
 
+  bool avoidBackgroundLayer() const { return m_avoidBackgroundLayer; }
+
 private:
   FileOp(); // Undefined
   FileOp(FileOpType type, Context* context, const FileOpConfig* config);
@@ -301,6 +307,7 @@ private:
                                       // GIF/FLI/ASE).
   bool m_createPaletteFromRgba;
   bool m_ignoreEmpty;
+  bool m_avoidBackgroundLayer;
 
   // True if the file contained a color profile when it was loaded.
   bool m_embeddedColorProfile;

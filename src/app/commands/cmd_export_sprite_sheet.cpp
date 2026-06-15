@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019-2024  Igara Studio S.A.
+// Copyright (C) 2019-present  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -33,15 +33,12 @@
 #include "app/ui/status_bar.h"
 #include "app/ui/timeline/timeline.h"
 #include "app/util/layer_utils.h"
-#include "base/convert_to.h"
 #include "base/fs.h"
 #include "base/string.h"
 #include "base/thread.h"
 #include "doc/layer.h"
-#include "doc/layer_tilemap.h"
 #include "doc/tag.h"
 #include "doc/tileset.h"
-#include "doc/tilesets.h"
 #include "fmt/format.h"
 #include "ui/message.h"
 #include "ui/system.h"
@@ -92,10 +89,10 @@ bool ask_overwrite(const bool askFilename,
       (askDataname && !dataname.empty() && base::is_file(dataname))) {
     std::string text;
 
-    if (base::is_file(filename))
+    if (base::is_file(filename) && askFilename)
       text += "<<" + base::get_file_name(filename);
 
-    if (base::is_file(dataname))
+    if (base::is_file(dataname) && askDataname)
       text += "<<" + base::get_file_name(dataname);
 
     const int ret = OptionalAlert::show(
@@ -149,8 +146,8 @@ void destroy_doc(Context* ctx, Doc* doc)
 void insert_layers_to_selected_layers(Layer* layer, SelectedLayers& selectedLayers)
 {
   if (layer->isGroup()) {
-    auto children = static_cast<LayerGroup*>(layer)->layers();
-    for (auto child : children)
+    auto children = layer->layers();
+    for (Layer* child : children)
       insert_layers_to_selected_layers(child, selectedLayers);
   }
   else
@@ -186,6 +183,7 @@ Doc* generate_sprite_sheet_from_params(DocExporter& exporter,
   const bool extrude = params.extrude();
   const bool ignoreEmpty = params.ignoreEmpty();
   const bool mergeDuplicates = params.mergeDuplicates();
+  const bool powerOfTwoSize = params.powerOfTwoSize();
   const bool splitLayers = params.splitLayers();
   const bool splitTags = params.splitTags();
   const bool splitGrid = params.splitGrid();
@@ -273,6 +271,7 @@ Doc* generate_sprite_sheet_from_params(DocExporter& exporter,
   exporter.setSplitTags(splitTags);
   exporter.setIgnoreEmptyCels(ignoreEmpty);
   exporter.setMergeDuplicates(mergeDuplicates);
+  exporter.setPowerOfTwoSize(powerOfTwoSize);
   if (listLayers)
     exporter.setListLayers(true);
   if (listTags)
@@ -323,8 +322,6 @@ public:
     , m_backBuffer(std::make_shared<doc::ImageBuffer>())
     , m_site(site)
     , m_sprite(site.sprite())
-    , m_filenameAskOverwrite(true)
-    , m_dataFilenameAskOverwrite(true)
     , m_editor(nullptr)
     , m_genTimer(100, nullptr)
     , m_executionID(0)
@@ -400,17 +397,18 @@ public:
     extrudeEnabled()->setSelected(params.extrude());
     mergeDups()->setSelected(params.mergeDuplicates());
     ignoreEmpty()->setSelected(params.ignoreEmpty());
+    powerOfTwoSize()->setSelected(params.powerOfTwoSize());
 
     borderPadding()->setTextf("%d", params.borderPadding());
     shapePadding()->setTextf("%d", params.shapePadding());
     innerPadding()->setTextf("%d", params.innerPadding());
 
-    m_filename = params.textureFilename();
-    imageEnabled()->setSelected(!m_filename.empty());
+    imageFilename()->setFilename(params.textureFilename());
+    imageEnabled()->setSelected(!imageFilename()->fullFilename().empty());
     imageFilename()->setVisible(imageEnabled()->isSelected());
 
-    m_dataFilename = params.dataFilename();
-    dataEnabled()->setSelected(!m_dataFilename.empty());
+    dataFilename()->setFilename(params.dataFilename());
+    dataEnabled()->setSelected(!dataFilename()->fullFilename().empty());
     dataFormat()->setSelectedItemIndex(int(params.dataFormat()));
     splitLayers()->setSelected(params.splitLayers());
     splitTags()->setSelected(params.splitTags());
@@ -423,19 +421,25 @@ public:
     updateDataFields();
 
     std::string base = site.document()->filename();
-    base = base::join_path(base::get_file_path(base), base::get_file_title(base));
+    const std::string basePath = (base::get_file_path(base).empty() ? base::get_current_path() :
+                                                                      base::get_file_path(base));
+    base = base::join_path(basePath, base::get_file_title(base));
 
-    if (m_filename.empty() || m_filename == kSpecifiedFilename) {
+    imageFilename()->setDocFilename(base);
+    dataFilename()->setDocFilename(base);
+    if (imageFilename()->fullFilename().empty() ||
+        imageFilename()->fullFilename() == kSpecifiedFilename) {
       std::string defExt = pref.spriteSheet.defaultExtension();
 
       if (base::utf8_icmp(base::get_file_extension(site.document()->filename()), defExt) == 0)
-        m_filename = base + "-sheet." + defExt;
+        imageFilename()->setFilename(base + "-sheet." + defExt);
       else
-        m_filename = base + "." + defExt;
+        imageFilename()->setFilename(base + "." + defExt);
     }
 
-    if (m_dataFilename.empty() || m_dataFilename == kSpecifiedFilename)
-      m_dataFilename = base + ".json";
+    if (dataFilename()->fullFilename().empty() ||
+        imageFilename()->fullFilename() == kSpecifiedFilename)
+      dataFilename()->setFilename(base + ".json");
 
     exportButton()->Click.connect([this] { onExport(); });
     sheetType()->Change.connect([this] { onSheetTypeChange(); });
@@ -448,10 +452,19 @@ public:
     extrudeEnabled()->Click.connect([this] { generatePreview(); });
     mergeDups()->Click.connect([this] { generatePreview(); });
     ignoreEmpty()->Click.connect([this] { generatePreview(); });
-    imageEnabled()->Click.connect([this] { onImageEnabledChange(); });
-    imageFilename()->Click.connect([this] { onImageFilename(); });
-    dataEnabled()->Click.connect([this] { onDataEnabledChange(); });
-    dataFilename()->Click.connect([this] { onDataFilename(); });
+    powerOfTwoSize()->Click.connect([this] { generatePreview(); });
+
+    imageEnabled()->Click.connect(
+      [this] { onOutputFieldEnabledChange(imageFilename(), imageEnabled()->isSelected()); });
+    imageFilename()->SelectOutputFile.connect(
+      [this]() -> std::string { return onFilenameBrowse(imageFilename()); });
+    imageFilename()->Change.connect([this] { resize(); });
+    dataEnabled()->Click.connect(
+      [this] { onOutputFieldEnabledChange(dataFilename(), dataEnabled()->isSelected()); });
+    dataFilename()->SelectOutputFile.connect(
+      [this]() -> std::string { return onFilenameBrowse(dataFilename()); });
+    dataFilename()->Change.connect([this] { resize(); });
+
     trimSpriteEnabled()->Click.connect([this] { onTrimEnabledChange(); });
     trimEnabled()->Click.connect([this] { onTrimEnabledChange(); });
     gridTrimEnabled()->Click.connect([this] { generatePreview(); });
@@ -481,7 +494,8 @@ public:
 
     onChangeSection();
     onSheetTypeChange();
-    onFileNamesChange();
+    imageFilename()->onUpdateText();
+    dataFilename()->onUpdateText();
     updateExportButton();
 
     preview()->setSelected(pref.spriteSheet.preview());
@@ -539,6 +553,7 @@ public:
     params.extrude(extrudeValue());
     params.mergeDuplicates(mergeDupsValue());
     params.ignoreEmpty(ignoreEmptyValue());
+    params.powerOfTwoSize(powerOfTwoSizeValue());
     params.openGenerated(openGeneratedValue());
     params.layer(layerValue());
     params.layerIndex(layerIndex());
@@ -658,7 +673,7 @@ private:
   std::string filenameValue() const
   {
     if (imageEnabled()->isSelected())
-      return m_filename;
+      return imageFilename()->fullFilename();
     else
       return std::string();
   }
@@ -666,7 +681,7 @@ private:
   std::string dataFilenameValue() const
   {
     if (dataEnabled()->isSelected())
-      return m_dataFilename;
+      return dataFilename()->fullFilename();
     else
       return std::string();
   }
@@ -754,11 +769,13 @@ private:
 
   bool listSlicesValue() const { return listSlices()->isSelected(); }
 
+  bool powerOfTwoSizeValue() const { return powerOfTwoSize()->isSelected(); }
+
   void onExport()
   {
-    if (!ask_overwrite(m_filenameAskOverwrite,
+    if (!ask_overwrite(imageFilename()->askOverwrite(),
                        filenameValue(),
-                       m_dataFilenameAskOverwrite,
+                       dataFilename()->askOverwrite(),
                        dataFilenameValue()))
       return;
 
@@ -843,63 +860,34 @@ private:
     generatePreview();
   }
 
-  void onFileNamesChange()
+  std::string onFilenameBrowse(FilenameField* const field)
   {
-    imageFilename()->setText(base::get_file_name(m_filename));
-    dataFilename()->setText(base::get_file_name(m_dataFilename));
-    resize();
-  }
-
-  void onImageFilename()
-  {
-    base::paths newFilename;
-    if (!app::show_file_selector(Strings::export_sprite_sheet_save_title(),
-                                 m_filename,
-                                 get_writable_extensions(),
-                                 FileSelectorType::Save,
-                                 newFilename))
-      return;
-
-    ASSERT(!newFilename.empty());
-
-    m_filename = newFilename.front();
-    m_filenameAskOverwrite = false; // Already asked in file selector
-    onFileNamesChange();
-  }
-
-  void onImageEnabledChange()
-  {
-    m_filenameAskOverwrite = true;
-
-    imageFilename()->setVisible(imageEnabled()->isSelected());
-    updateExportButton();
-    resize();
-  }
-
-  void onDataFilename()
-  {
+    const std::string& title = (field == dataFilename() ?
+                                  Strings::export_sprite_sheet_save_json_title() :
+                                  Strings::export_sprite_sheet_save_title());
     // TODO hardcoded "json" extension
-    base::paths exts = { "json" };
+    const base::paths json = { "json" };
+    base::paths exts = (field == imageFilename() ? get_writable_extensions() : json);
     base::paths newFilename;
-    if (!app::show_file_selector(Strings::export_sprite_sheet_save_json_title(),
-                                 m_dataFilename,
+
+    if (!app::show_file_selector(title,
+                                 field->fullFilename(),
                                  exts,
                                  FileSelectorType::Save,
                                  newFilename))
-      return;
+      return std::string();
 
     ASSERT(!newFilename.empty());
-
-    m_dataFilename = newFilename.front();
-    m_dataFilenameAskOverwrite = false; // Already asked in file selector
-    onFileNamesChange();
+    return newFilename.front();
   }
 
-  void onDataEnabledChange()
+  void onOutputFieldEnabledChange(FilenameField* const field, bool visible)
   {
-    m_dataFilenameAskOverwrite = true;
+    field->setAskOverwrite(true);
+    field->setVisible(visible);
+    if (field == dataFilename())
+      updateDataFields();
 
-    updateDataFields();
     updateExportButton();
     resize();
   }
@@ -1145,10 +1133,6 @@ private:
   doc::ImageBufferPtr m_backBuffer;  // ImageBuffer in the generator
   Site& m_site;
   Sprite* m_sprite;
-  std::string m_filename;
-  std::string m_dataFilename;
-  bool m_filenameAskOverwrite;
-  bool m_dataFilenameAskOverwrite;
   std::unique_ptr<Doc> m_spriteSheet;
   Editor* m_editor;
   std::unique_ptr<Task> m_genTask;
@@ -1207,8 +1191,7 @@ private:
 
 } // anonymous namespace
 
-ExportSpriteSheetCommand::ExportSpriteSheetCommand(const char* id)
-  : CommandWithNewParams(id, CmdRecordableFlag)
+ExportSpriteSheetCommand::ExportSpriteSheetCommand(const char* id) : CommandWithNewParams(id)
 {
 }
 
@@ -1273,6 +1256,8 @@ void ExportSpriteSheetCommand::onExecute(Context* context)
         params.mergeDuplicates(defPref.spriteSheet.mergeDuplicates());
       if (!params.ignoreEmpty.isSet())
         params.ignoreEmpty(defPref.spriteSheet.ignoreEmpty());
+      if (!params.powerOfTwoSize.isSet())
+        params.powerOfTwoSize(defPref.spriteSheet.powerOfTwoSize());
       if (!params.openGenerated.isSet())
         params.openGenerated(defPref.spriteSheet.openGenerated());
       if (!params.layer.isSet())
@@ -1332,6 +1317,7 @@ void ExportSpriteSheetCommand::onExecute(Context* context)
     docPref.spriteSheet.extrude(params.extrude());
     docPref.spriteSheet.mergeDuplicates(params.mergeDuplicates());
     docPref.spriteSheet.ignoreEmpty(params.ignoreEmpty());
+    docPref.spriteSheet.powerOfTwoSize(params.powerOfTwoSize());
     docPref.spriteSheet.openGenerated(params.openGenerated());
     docPref.spriteSheet.layer(params.layer());
     docPref.spriteSheet.layerIndex(params.layerIndex());

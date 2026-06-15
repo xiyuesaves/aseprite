@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2024  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -41,6 +41,7 @@
 #include "doc/tileset_io.h"
 #include "doc/tilesets.h"
 #include "doc/user_data_io.h"
+#include "doc/uuid_io.h"
 #include "fixmath/fixmath.h"
 
 #include <fstream>
@@ -103,14 +104,12 @@ public:
 
     // Save original cel data (skip links)
     for (Layer* lay : layers) {
-      CelList cels;
-      lay->getCels(cels);
-
-      for (Cel* cel : cels) {
+      for (const Cel* cel : lay->cels()) {
         if (cel->link()) // Skip link
           continue;
 
-        if (!saveObject("img", cel->image(), &Writer::writeImage))
+        // TODO backup other cel data, e.g. for audio layers
+        if (cel->image() && !saveObject("img", cel->image(), &Writer::writeImage))
           return false;
 
         if (!saveObject("celdata", cel->data(), &Writer::writeCelData))
@@ -120,10 +119,7 @@ public:
 
     // Save all cels (original and links)
     for (Layer* lay : layers) {
-      CelList cels;
-      lay->getCels(cels);
-
-      for (Cel* cel : cels)
+      for (Cel* cel : lay->cels())
         if (!saveObject("cel", cel, &Writer::writeCel))
           return false;
     }
@@ -234,14 +230,14 @@ private:
     return true;
   }
 
-  void writeAllLayersID(std::ofstream& s, ObjectId parentId, const LayerGroup* group)
+  void writeAllLayersID(std::ofstream& s, ObjectId parentId, const Layer* group)
   {
     for (const Layer* lay : group->layers()) {
       write32(s, lay->id());
       write32(s, parentId);
 
       if (lay->isGroup())
-        writeAllLayersID(s, lay->id(), static_cast<const LayerGroup*>(lay));
+        writeAllLayersID(s, lay->id(), lay);
     }
   }
 
@@ -258,19 +254,9 @@ private:
         if (lay->type() == ObjectType::LayerTilemap)
           write32(s, static_cast<const LayerTilemap*>(lay)->tilesetIndex());
 
-        CelConstIterator it, begin = static_cast<const LayerImage*>(lay)->getCelBegin();
-        CelConstIterator end = static_cast<const LayerImage*>(lay)->getCelEnd();
-
         // Blend mode & opacity
-        write16(s, (int)static_cast<const LayerImage*>(lay)->blendMode());
-        write8(s, static_cast<const LayerImage*>(lay)->opacity());
-
-        // Cels
-        write32(s, static_cast<const LayerImage*>(lay)->getCelsCount());
-        for (it = begin; it != end; ++it) {
-          const Cel* cel = *it;
-          write32(s, cel->id());
-        }
+        write16(s, (int)lay->blendMode());
+        write8(s, lay->opacity());
         break;
       }
 
@@ -280,8 +266,18 @@ private:
         break;
     }
 
+    // Save cels
+    if (lay->type() != ObjectType::LayerGroup) {
+      const CelList& cels = lay->cels();
+      write32(s, cels.size());
+      for (const Cel* cel : cels)
+        write32(s, cel->id());
+    }
+
     // Save user data
     write_user_data(s, lay->userData());
+
+    write_uuid(s, lay->uuid());
     return true;
   }
 

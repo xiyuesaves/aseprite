@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2024  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -10,28 +10,18 @@
 #endif
 
 #include "app/app.h"
-#include "app/color.h"
 #include "app/commands/command.h"
 #include "app/commands/params.h"
-#include "app/console.h"
 #include "app/context_access.h"
 #include "app/doc_api.h"
 #include "app/i18n/strings.h"
 #include "app/modules/gui.h"
 #include "app/tx.h"
-#include "app/ui/doc_view.h"
-#include "app/ui/editor/editor.h"
 #include "app/ui/main_window.h"
 #include "app/ui/status_bar.h"
 #include "app/ui/timeline/timeline.h"
-#include "app/ui_context.h"
-#include "doc/cel.h"
-#include "doc/image.h"
 #include "doc/layer.h"
 #include "doc/sprite.h"
-#include "ui/ui.h"
-
-#include <stdexcept>
 
 namespace app {
 
@@ -57,7 +47,7 @@ private:
   Content m_content;
 };
 
-NewFrameCommand::NewFrameCommand() : Command(CommandId::NewFrame(), CmdRecordableFlag)
+NewFrameCommand::NewFrameCommand() : Command(CommandId::NewFrame())
 {
 }
 
@@ -113,41 +103,37 @@ void NewFrameCommand::onExecute(Context* context)
           case Content::DUPLICATE_CELS_LINKED: continuous.reset(new bool(true)); break;
         }
 
-        const Site* site = writer.site();
-        if (site->inTimeline() && !site->selectedLayers().empty() &&
-            !site->selectedFrames().empty()) {
-          auto timeline = App::instance()->timeline();
-          timeline->prepareToMoveRange();
-          DocRange range = timeline->range();
+        const Site& site = writer.site();
+        if (site.inTimeline() && !site.selectedLayers().empty() && !site.selectedFrames().empty()) {
+          auto* timeline = App::instance()->timeline();
+          if (timeline)
+            timeline->prepareToMoveRange();
+
+          view::RealRange range = site.range();
 
           SelectedLayers selLayers;
-          if (site->inFrames())
+          if (site.inFrames())
             selLayers.selectAllLayers(writer.sprite()->root());
           else {
-            selLayers = site->selectedLayers();
+            selLayers = site.selectedLayers();
             selLayers.expandCollapsedGroups();
           }
 
-          frame_t frameRange = (site->selectedFrames().lastFrame() -
-                                site->selectedFrames().firstFrame() + 1);
+          frame_t frameRange = (site.selectedFrames().lastFrame() -
+                                site.selectedFrames().firstFrame() + 1);
 
           for (Layer* layer : selLayers) {
-            if (layer->isImage()) {
-              for (frame_t srcFrame : site->selectedFrames().reversed()) {
-                frame_t dstFrame = srcFrame + frameRange;
-                api.copyCel(static_cast<LayerImage*>(layer),
-                            srcFrame,
-                            static_cast<LayerImage*>(layer),
-                            dstFrame,
-                            continuous.get());
-              }
+            for (frame_t srcFrame : site.selectedFrames().reversed()) {
+              frame_t dstFrame = srcFrame + frameRange;
+              api.copyCel(layer, srcFrame, layer, dstFrame, continuous.get());
             }
           }
 
           range.displace(0, frameRange);
-          timeline->moveRange(range);
+          if (timeline)
+            timeline->moveRange(range);
         }
-        else if (auto layer = static_cast<LayerImage*>(writer.layer())) {
+        else if (Layer* layer = writer.layer()) {
           api.copyCel(layer, writer.frame(), layer, writer.frame() + 1, continuous.get());
 
           context->setActiveFrame(writer.frame() + 1);

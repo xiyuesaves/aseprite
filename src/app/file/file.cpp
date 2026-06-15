@@ -499,6 +499,11 @@ FileOp* FileOp::createLoadDocumentOperation(Context* context,
       fop->m_dataFilename = dataFilename;
   }
 
+  // Avoid creating a background layer?
+  if (flags & FILE_LOAD_AVOID_BACKGROUND_LAYER) {
+    fop->m_avoidBackgroundLayer = true;
+  }
+
 done:;
   return fop.release();
 }
@@ -659,14 +664,19 @@ FileOp* FileOp::createSaveDocumentOperation(const Context* context,
       // If the error is fatal, we cannot ignore a no-op, we always
       // show the alert dialog.
       if (fatal) {
-        ui::Alert::show(Strings::alerts_file_format_doesnt_support_error(format->name(), warnings));
+        ui::Alert::show(
+          Strings::alerts_file_format_doesnt_support_error(format->name(),
+                                                           base::get_file_extension(filename),
+                                                           warnings));
         ret = 1;
       }
       else {
         ret = OptionalAlert::show(
           Preferences::instance().saveFile.showFileFormatDoesntSupportAlert,
           1, // Yes is the default option when the alert dialog is disabled
-          Strings::alerts_file_format_doesnt_support_warning(format->name(), warnings));
+          Strings::alerts_file_format_doesnt_support_warning(format->name(),
+                                                             base::get_file_extension(filename),
+                                                             warnings));
       }
 
       // Operation can't be done (by fatal error) or the user cancel
@@ -879,8 +889,9 @@ void FileOp::operate(IFileOpProgress* progress)
 
       // Final setup
       if (m_document) {
-        // Configure the layer as the 'Background'
-        if (!m_seq.has_alpha)
+        // Configure the layer as the 'Background'. Only if background layers
+        // are welcome.
+        if (!m_seq.has_alpha && !m_avoidBackgroundLayer)
           m_seq.layer->configureAsBackground();
 
         // Set the final canvas size (as the bigger loaded
@@ -889,10 +900,6 @@ void FileOp::operate(IFileOpProgress* progress)
 
         // Set the frames range
         m_document->sprite()->setTotalFrames(frame);
-
-        // Sets special options from the specific format (e.g. BMP
-        // file can contain the number of bits per pixel).
-        m_document->setFormatOptions(m_formatOptions);
       }
     }
     // Direct load from one file.
@@ -901,6 +908,12 @@ void FileOp::operate(IFileOpProgress* progress)
       if (!m_format->load(this)) {
         setError("Error loading sprite from file \"%s\"\n", m_filename.c_str());
       }
+    }
+
+    if (m_document) {
+      // Sets special options from the specific format (e.g. BMP
+      // file can contain the number of bits per pixel).
+      m_document->setFormatOptions(m_formatOptions);
     }
 
     // Load special data from .aseprite-data file
@@ -1058,6 +1071,12 @@ void FileOp::createDocument(Sprite* spr)
 
   ASSERT(m_document == NULL);
   m_document = new Doc(spr);
+}
+
+void FileOp::setDocument(Doc* doc)
+{
+  ASSERT(m_document == NULL);
+  m_document = doc;
 }
 
 void FileOp::postLoad()
@@ -1440,6 +1459,7 @@ FileOp::FileOp(FileOpType type, Context* context, const FileOpConfig* config)
   , m_oneframe(false)
   , m_createPaletteFromRgba(false)
   , m_ignoreEmpty(false)
+  , m_avoidBackgroundLayer(false)
   , m_embeddedColorProfile(false)
   , m_embeddedGridBounds(false)
 {

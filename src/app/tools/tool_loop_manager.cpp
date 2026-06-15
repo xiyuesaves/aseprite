@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2019-2024  Igara Studio S.A.
+// Copyright (C) 2019-present  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -43,9 +43,8 @@ using namespace filters;
 ToolLoopManager::ToolLoopManager(ToolLoop* toolLoop)
   : m_toolLoop(toolLoop)
   , m_canceled(false)
-  , m_brushSize0(toolLoop->getBrush()->size())
-  , m_brushAngle0(toolLoop->getBrush()->angle())
   , m_dynamics(toolLoop->getDynamics())
+  , m_brush0(toolLoop->getBrush())
 {
 }
 
@@ -269,9 +268,14 @@ void ToolLoopManager::doLoopStep(bool lastStep)
     // last trace only) or to draw the final result in contour tool
     // (the final result is filled).
     m_toolLoop->invalidateDstImage();
+    // Also reset the point shape variable for a new stroke. Useful
+    // for Selection tools + TilePointShape.
+    m_toolLoop->getPointShape()->prepareForStroke(m_toolLoop);
   }
 
   m_toolLoop->validateDstImage(m_dirtyArea);
+  if (!lastStep && m_toolLoop->isSelectionToolLoop())
+    m_toolLoop->clearSelectionToolMask(false);
 
   // Join or fill user points
   if (fillStrokes)
@@ -327,14 +331,26 @@ void ToolLoopManager::calculateDirtyArea(const Strokes& strokes)
     // Expand the dirty-area with the pen width
     Rect r1, r2;
 
-    m_toolLoop->getPointShape()->getModifiedArea(m_toolLoop, strokeBounds.x, strokeBounds.y, r1);
+    m_toolLoop->getPointShape()->getModifiedArea(m_toolLoop,
+                                                 strokeBounds.x,
+                                                 strokeBounds.y,
+                                                 stroke.firstPoint().symmetry,
+                                                 r1);
 
     m_toolLoop->getPointShape()->getModifiedArea(m_toolLoop,
                                                  strokeBounds.x + strokeBounds.w - 1,
                                                  strokeBounds.y + strokeBounds.h - 1,
+                                                 stroke.firstPoint().symmetry,
                                                  r2);
 
     m_dirtyArea.createUnion(m_dirtyArea, Region(r1.createUnion(r2)));
+  }
+
+  // This ensures the Selection Tool Mask doesn't leave a 'trail' behind
+  if (m_toolLoop->isSelectionToolLoop()) {
+    auto bounds = m_dirtyArea.bounds();
+    bounds.enlarge(1);
+    m_dirtyArea |= gfx::Region(bounds);
   }
 
   // Merge new dirty area with the previous one (for tools like line
@@ -357,8 +373,8 @@ Stroke::Pt ToolLoopManager::getSpriteStrokePt(const Pointer& pointer)
 {
   // Convert the screen point to a sprite point
   Stroke::Pt spritePoint = pointer.point();
-  spritePoint.size = m_brushSize0;
-  spritePoint.angle = m_brushAngle0;
+  spritePoint.size = m_brush0->size();
+  spritePoint.angle = m_brush0->angle();
 
   // Center the input to some grid point if needed
   snapToGrid(spritePoint);

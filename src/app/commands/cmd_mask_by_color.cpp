@@ -15,7 +15,6 @@
 #include "app/color_utils.h"
 #include "app/commands/command.h"
 #include "app/commands/new_params.h"
-#include "app/console.h"
 #include "app/context.h"
 #include "app/context_access.h"
 #include "app/doc.h"
@@ -23,12 +22,10 @@
 #include "app/ini_file.h"
 #include "app/modules/gui.h"
 #include "app/tx.h"
+#include "app/ui/app_tooltips.h"
 #include "app/ui/color_bar.h"
 #include "app/ui/color_button.h"
 #include "app/ui/selection_mode_field.h"
-#include "base/chrono.h"
-#include "base/convert_to.h"
-#include "base/scoped_value.h"
 #include "doc/image.h"
 #include "doc/mask.h"
 #include "doc/sprite.h"
@@ -36,7 +33,6 @@
 #include "ui/button.h"
 #include "ui/label.h"
 #include "ui/slider.h"
-#include "ui/tooltips.h"
 #include "ui/widget.h"
 #include "ui/window.h"
 
@@ -65,7 +61,7 @@ public:
     // ADD/SUBTRACT/INTERSECT Selection Mode
     , m_isOrigMaskVisible(reader.document()->isMaskVisible())
   {
-    TooltipManager* tooltipManager = new TooltipManager();
+    auto* tooltipManager = new AppTooltipManager();
     addChild(tooltipManager);
     auto box1 = new Box(VERTICAL);
     auto box2 = new Box(HORIZONTAL);
@@ -203,8 +199,7 @@ protected:
   void onExecute(Context* context) override;
 };
 
-MaskByColorCommand::MaskByColorCommand()
-  : CommandWithNewParams(CommandId::MaskByColor(), CmdUIOnlyFlag)
+MaskByColorCommand::MaskByColorCommand() : CommandWithNewParams(CommandId::MaskByColor())
 {
 }
 

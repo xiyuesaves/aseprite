@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2024  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -33,6 +33,8 @@
 #include "doc/slice.h"
 #include "doc/sprite.h"
 #include "doc/tag.h"
+#include "doc/tileset.h"
+#include "doc/tilesets.h"
 #include "os/system.h"
 #include "os/window.h"
 #include "ui/system.h"
@@ -122,6 +124,11 @@ Doc::LockResult Doc::upgradeToWrite(int timeout)
   return res;
 }
 
+void Doc::updateWriterThread()
+{
+  m_rwLock.updateWriterThread();
+}
+
 void Doc::downgradeToRead(LockResult lockResult)
 {
   DOC_TRACE("DOC: downgradeToRead", this, (int)lockResult);
@@ -167,6 +174,12 @@ DocApi Doc::getApi(Transaction& transaction)
 
 //////////////////////////////////////////////////////////////////////
 // Main properties
+
+void Doc::resetUndoHistory()
+{
+  m_undo = std::make_unique<DocUndo>();
+  m_undo->setContext(m_ctx);
+}
 
 bool Doc::isUndoing() const
 {
@@ -336,6 +349,19 @@ void Doc::notifyAfterAddTile(LayerTilemap* layer, frame_t frame, tile_index ti)
   notify_observers<DocEvent&>(&DocObserver::onAfterAddTile, ev);
 }
 
+void Doc::notifyBeforeSlicesDuplication()
+{
+  DocEvent ev(this);
+  notify_observers<DocEvent&>(&DocObserver::onBeforeSlicesDuplication, ev);
+}
+
+void Doc::notifySliceDuplicated(Slice* slice)
+{
+  DocEvent ev(this);
+  ev.slice(slice);
+  notify_observers<DocEvent&>(&DocObserver::onSliceDuplicated, ev);
+}
+
 bool Doc::isModified() const
 {
   return !m_undo->isInSavedStateOrSimilar();
@@ -495,9 +521,9 @@ void Doc::resetTransformation()
 //////////////////////////////////////////////////////////////////////
 // Copying
 
-void Doc::copyLayerContent(const Layer* sourceLayer0, Doc* destDoc, Layer* destLayer0) const
+void Doc::copyLayerContent(const Layer* sourceLayer, Doc* destDoc, Layer* destLayer) const
 {
-  LayerFlags dstFlags = sourceLayer0->flags();
+  LayerFlags dstFlags = sourceLayer->flags();
 
   // Remove the "background" flag if the destDoc already has a background layer.
   if (((int)dstFlags & (int)LayerFlags::Background) == (int)LayerFlags::Background &&
@@ -506,21 +532,54 @@ void Doc::copyLayerContent(const Layer* sourceLayer0, Doc* destDoc, Layer* destL
   }
 
   // Copy the layer name/flags/user data
-  destLayer0->setName(sourceLayer0->name());
-  destLayer0->setFlags(dstFlags);
-  destLayer0->setUserData(sourceLayer0->userData());
+  destLayer->setName(sourceLayer->name());
+  destLayer->setFlags(dstFlags);
+  destLayer->setUserData(sourceLayer->userData());
 
-  if (sourceLayer0->isImage() && destLayer0->isImage()) {
-    const LayerImage* sourceLayer = static_cast<const LayerImage*>(sourceLayer0);
-    LayerImage* destLayer = static_cast<LayerImage*>(destLayer0);
+  // Copy blend mode and opacity
+  destLayer->setBlendMode(sourceLayer->blendMode());
+  destLayer->setOpacity(sourceLayer->opacity());
 
-    // Copy blend mode and opacity
-    destLayer->setBlendMode(sourceLayer->blendMode());
-    destLayer->setOpacity(sourceLayer->opacity());
+  if (sourceLayer->isGroup() && destLayer->isGroup()) {
+    for (Layer* sourceChild : sourceLayer->layers()) {
+      std::unique_ptr<Layer> destChild(nullptr);
 
+      if (sourceChild->isImage()) {
+        if (sourceChild->isTilemap()) {
+          auto* tilemapLayer = static_cast<LayerTilemap*>(sourceChild);
+          destChild.reset(new LayerTilemap(destLayer->sprite(), tilemapLayer->tilesetIndex()));
+        }
+        else {
+          destChild.reset(new LayerImage(destLayer->sprite()));
+        }
+
+        copyLayerContent(sourceChild, destDoc, destChild.get());
+      }
+      else if (sourceChild->isGroup()) {
+        destChild.reset(new LayerGroup(destLayer->sprite()));
+        copyLayerContent(sourceChild, destDoc, destChild.get());
+      }
+      else {
+        ASSERT(false);
+      }
+
+      ASSERT(destChild != NULL);
+
+      // Add the new layer in the sprite.
+
+      Layer* newLayer = destChild.release();
+      Layer* afterThis = destLayer->lastLayer();
+
+      destLayer->addLayer(newLayer);
+      destChild.release();
+
+      destLayer->stackLayer(newLayer, afterThis);
+    }
+  }
+  else if (sourceLayer->type() == destLayer->type()) {
     // Copy cels
     CelConstIterator it = sourceLayer->getCelBegin();
-    CelConstIterator end = sourceLayer->getCelEnd();
+    const CelConstIterator end = sourceLayer->getCelEnd();
 
     std::map<ObjectId, Cel*> linked;
 
@@ -549,38 +608,6 @@ void Doc::copyLayerContent(const Layer* sourceLayer0, Doc* destDoc, Layer* destL
       newCel.release();
     }
   }
-  else if (sourceLayer0->isGroup() && destLayer0->isGroup()) {
-    const LayerGroup* sourceLayer = static_cast<const LayerGroup*>(sourceLayer0);
-    LayerGroup* destLayer = static_cast<LayerGroup*>(destLayer0);
-
-    for (Layer* sourceChild : sourceLayer->layers()) {
-      std::unique_ptr<Layer> destChild(nullptr);
-
-      if (sourceChild->isImage()) {
-        destChild.reset(new LayerImage(destLayer->sprite()));
-        copyLayerContent(sourceChild, destDoc, destChild.get());
-      }
-      else if (sourceChild->isGroup()) {
-        destChild.reset(new LayerGroup(destLayer->sprite()));
-        copyLayerContent(sourceChild, destDoc, destChild.get());
-      }
-      else {
-        ASSERT(false);
-      }
-
-      ASSERT(destChild != NULL);
-
-      // Add the new layer in the sprite.
-
-      Layer* newLayer = destChild.release();
-      Layer* afterThis = destLayer->lastLayer();
-
-      destLayer->addLayer(newLayer);
-      destChild.release();
-
-      destLayer->stackLayer(newLayer, afterThis);
-    }
-  }
   else {
     ASSERT(false && "Trying to copy two incompatible layers");
   }
@@ -596,6 +623,7 @@ Doc* Doc::duplicate(DuplicateType type) const
   Sprite* spriteCopy = spriteCopyPtr.release();
 
   spriteCopy->setTotalFrames(sourceSprite->totalFrames());
+  spriteCopy->setTileManagementPlugin(sourceSprite->tileManagementPlugin());
 
   // Copy frames duration
   for (frame_t i(0); i < sourceSprite->totalFrames(); ++i)
@@ -611,6 +639,16 @@ Doc* Doc::duplicate(DuplicateType type) const
     spriteCopy->slices().add(sliceCopy);
 
     ASSERT(sliceCopy->owner() == &spriteCopy->slices());
+  }
+
+  // Copy tilesets
+  if (sourceSprite->hasTilesets()) {
+    for (Tileset* tileset : *sourceSprite->tilesets()) {
+      auto tilesetCopy = new Tileset(spriteCopy, tileset);
+      spriteCopy->tilesets()->add(tilesetCopy);
+
+      ASSERT(tilesetCopy->sprite() == spriteCopy)
+    }
   }
 
   // Copy color palettes
@@ -697,8 +735,7 @@ void Doc::removeFromContext()
 
 void Doc::updateOSColorSpace(bool appWideSignal)
 {
-  auto system = os::instance();
-  if (system) {
+  if (const os::SystemRef system = os::System::instance()) {
     m_osColorSpace = system->makeColorSpace(sprite()->colorSpace());
     if (!m_osColorSpace && system->defaultWindow())
       m_osColorSpace = system->defaultWindow()->colorSpace();

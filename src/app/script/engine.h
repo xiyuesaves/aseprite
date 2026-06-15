@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2018-2024  Igara Studio S.A.
+// Copyright (C) 2018-2025  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -22,6 +22,7 @@
 #include "doc/object_ids.h"
 #include "doc/pixel_format.h"
 #include "doc/tile.h"
+#include "doc/user_data.h"
 #include "gfx/fwd.h"
 
 #include <cstdio>
@@ -44,7 +45,6 @@ namespace doc {
 class Cel;
 class Image;
 class Layer;
-class LayerGroup;
 class Mask;
 class Palette;
 class Sprite;
@@ -140,6 +140,7 @@ private:
 
 void push_app_events(lua_State* L);
 void push_app_theme(lua_State* L, int uiscale = 1);
+void push_app_clipboard(lua_State* L);
 int push_image_iterator_function(lua_State* L, const doc::Image* image, int extraArgIndex);
 void push_brush(lua_State* L, const doc::BrushRef& brush);
 void push_cel_image(lua_State* L, doc::Cel* cel);
@@ -150,7 +151,7 @@ void push_cels(lua_State* L, doc::Sprite* sprite);
 void push_color_space(lua_State* L, const gfx::ColorSpace& cs);
 void push_doc_range(lua_State* L, Site& site);
 void push_editor(lua_State* L, Editor* editor);
-void push_group_layers(lua_State* L, doc::LayerGroup* group);
+void push_group_layers(lua_State* L, doc::Layer* group);
 void push_image(lua_State* L, doc::Image* image);
 void push_layers(lua_State* L, const doc::ObjectIds& layers);
 void push_palette(lua_State* L, doc::Palette* palette);
@@ -168,6 +169,7 @@ void push_sprite_selection(lua_State* L, doc::Sprite* sprite);
 void push_sprite_slices(lua_State* L, doc::Sprite* sprite);
 void push_sprite_tags(lua_State* L, doc::Sprite* sprite);
 void push_sprites(lua_State* L);
+void push_standalone_selection(lua_State* L, doc::Mask* mask);
 void push_tile(lua_State* L, const doc::Tileset* tileset, doc::tile_index ti);
 void push_tile_properties(lua_State* L,
                           const doc::Tileset* tileset,
@@ -194,10 +196,11 @@ doc::Image* get_image_from_arg(lua_State* L, int index);
 doc::Cel* get_image_cel_from_arg(lua_State* L, int index);
 doc::Tileset* get_image_tileset_from_arg(lua_State* L, int index);
 doc::frame_t get_frame_number_from_arg(lua_State* L, int index);
-const doc::Mask* get_mask_from_arg(lua_State* L, int index);
+doc::Mask* get_mask_from_arg(lua_State* L, int index);
 app::tools::Tool* get_tool_from_arg(lua_State* L, int index);
 doc::BrushRef get_brush_from_arg(lua_State* L, int index);
 doc::Tileset* get_tile_index_from_arg(lua_State* L, int index, doc::tile_index& ts);
+doc::UserData::Properties* may_get_properties(lua_State* L, int index);
 
 // Used by App.open(), Sprite{ fromFile }, and Image{ fromFile }
 enum class LoadSpriteFromFileParam { FullAniAsSprite, OneFrameAsSprite, OneFrameAsImage };

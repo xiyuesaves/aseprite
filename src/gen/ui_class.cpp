@@ -102,8 +102,14 @@ static Item convert_to_item(XMLElement* elem)
     return item.typeIncl("app::DropDownButton", "app/ui/drop_down_button.h");
   if (name == "entry")
     return item.typeIncl("ui::Entry", "ui/entry.h");
+  if (name == "textedit")
+    return item.typeIncl("ui::TextEdit", "ui/textedit.h");
   if (name == "expr")
     return item.typeIncl("app::ExprEntry", "app/ui/expr_entry.h");
+  if (name == "filename")
+    return item.typeIncl("app::FilenameField", "app/ui/filename_field.h");
+  if (name == "font")
+    return item.typeIncl("app::FontEntry", "app/ui/font_entry.h");
   if (name == "grid")
     return item.typeIncl("ui::Grid", "ui/grid.h");
   if (name == "hbox")
@@ -163,6 +169,7 @@ void gen_ui_class(XMLDocument* doc, const std::string& inputFn, const std::strin
     return;
   }
 
+  bool hasTooltips = false;
   std::vector<Item> items;
   {
     XmlElements xmlWidgets;
@@ -172,8 +179,14 @@ void gen_ui_class(XMLDocument* doc, const std::string& inputFn, const std::strin
       if (!id)
         continue;
       items.push_back(convert_to_item(elem));
+
+      if (!hasTooltips && elem->Attribute("tooltip"))
+        hasTooltips = true;
     }
   }
+
+  if (hasTooltips)
+    items.push_back({ "tooltip_manager", "tooltipManager", "ui::TooltipManager", "ui/tooltips.h" });
 
   std::string className = convert_xmlid_to_cppid(widgetId, true);
   std::string fnUpper = base::string_to_upper(base::get_file_title(inputFn));

@@ -1,5 +1,5 @@
 // Aseprite
-// Copyright (C) 2020-2023  Igara Studio S.A.
+// Copyright (C) 2020-2024  Igara Studio S.A.
 // Copyright (C) 2001-2018  David Capello
 //
 // This program is distributed under the terms of
@@ -57,6 +57,7 @@ ColorButton::ColorButton(const app::Color& color,
 {
   setFocusStop(true);
   initTheme();
+  updateText();
 
   UIContext::instance()->add_observer(this);
 }
@@ -76,6 +77,7 @@ PixelFormat ColorButton::pixelFormat() const
 void ColorButton::setPixelFormat(PixelFormat pixelFormat)
 {
   m_pixelFormat = pixelFormat;
+  updateText();
   invalidate();
 }
 
@@ -100,6 +102,8 @@ void ColorButton::setColor(const app::Color& origColor)
     // HSV/HSL values.
     m_window->setColor(origColor, ColorPopup::DontChangeType);
   }
+
+  updateText();
 
   // Emit signal
   Change(color);
@@ -181,7 +185,7 @@ bool ColorButton::onProcessMessage(Message* msg)
 
           // Or get the color from the screen
           if (gfxColor == gfx::ColorNone) {
-            gfxColor = os::instance()->getColorFromScreen(screenPos);
+            gfxColor = os::System::instance()->getColorFromScreen(screenPos);
           }
 
           color = app::Color::fromRgb(gfx::getr(gfxColor),
@@ -264,18 +268,24 @@ void ColorButton::onPaint(PaintEvent& ev)
     }
   }
 
-  draw_color_button(g, rc, color, (doc::ColorMode)m_pixelFormat, hasMouse(), false);
+  if (!isEnabled())
+    color = Color::fromGray(color.getGray(), color.getAlpha());
+
+  draw_color_button(g,
+                    rc,
+                    color,
+                    (doc::ColorMode)m_pixelFormat,
+                    isEnabled() && (hasMouse() || hasFocus()),
+                    false);
 
   // Draw text
-  std::string str = m_color.toHumanReadableString(m_pixelFormat,
-                                                  app::Color::ShortHumanReadableString);
-
-  setTextQuiet(str.c_str());
-
   gfx::Color textcolor = gfx::rgba(255, 255, 255);
   if (color.isValid())
     textcolor = color_utils::blackandwhite_neg(
       gfx::rgba(color.getRed(), color.getGreen(), color.getBlue()));
+
+  if (!isEnabled())
+    textcolor = gfx::rgba(gfx::getr(textcolor), gfx::getg(textcolor), gfx::getb(textcolor), 125);
 
   gfx::Rect textrc;
   getTextIconInfo(NULL, &textrc);
@@ -438,6 +448,12 @@ void ColorButton::onActiveSiteChange(const Site& site)
         m_window->setVisible(true);
     }
   }
+}
+
+void ColorButton::updateText()
+{
+  setTextQuiet(m_color.toHumanReadableString(m_pixelFormat, app::Color::ShortHumanReadableString));
+  invalidate();
 }
 
 gfx::Rect ColorButton::convertBounds(const gfx::Rect& bounds) const
